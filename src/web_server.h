@@ -19,6 +19,8 @@ typedef struct {
     int agc_gain;
     int hmirror;
     int vflip;
+    int af_mode;    // 0=手动  1=连续自动对焦
+    int focus_pos;  // 手动对焦位置 0-1023
 } camera_settings_t;
 
 class CameraWebServer {

@@ -6,6 +6,7 @@ CameraWebServer* CameraWebServer::_inst = nullptr;
 
 // 全局帧计数器 (由流线程递增, 状态查询读取)
 static volatile uint32_t g_frame_count = 0;
+static volatile uint32_t g_bytes_sent = 0;
 
 static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -74,16 +75,16 @@ body{font-family:'SF Mono','Cascadia Code','Noto Sans SC','Segoe UI',monospace,s
 <div class="sec"><div class="st2">分辨率</div>
 <div class="rg">
 <button class="btn" id="rb2" onclick="sr(2)">QVGA</button>
-<button class="btn" id="rb4" onclick="sr(4)">VGA</button>
+<button class="btn on" id="rb4" onclick="sr(4)">VGA</button>
 <button class="btn" id="rb5" onclick="sr(5)">SVGA</button>
-<button class="btn on" id="rb8" onclick="sr(8)">UXGA</button>
+<button class="btn" id="rb8" onclick="sr(8)">UXGA</button>
 </div></div>
 
 <div class="sec"><div class="st2">图像调节</div>
 <div class="g">
 
 <div class="cd"><h3>基本</h3>
-<div class="rw"><label>质量</label><input type="range" id="quality" min="6" max="63" value="6" oninput="upd('quality',this.value)"><span class="vl" id="quality-v">6</span></div>
+<div class="rw"><label>质量</label><input type="range" id="quality" min="6" max="63" value="12" oninput="upd('quality',this.value)"><span class="vl" id="quality-v">12</span></div>
 <div class="rw"><label>亮度</label><input type="range" id="brightness" min="-2" max="2" value="0" step="1" oninput="upd('brightness',this.value)"><span class="vl" id="brightness-v">0</span></div>
 <div class="rw"><label>对比度</label><input type="range" id="contrast" min="-2" max="2" value="0" step="1" oninput="upd('contrast',this.value)"><span class="vl" id="contrast-v">0</span></div>
 <div class="rw"><label>饱和度</label><input type="range" id="saturation" min="-2" max="2" value="0" step="1" oninput="upd('saturation',this.value)"><span class="vl" id="saturation-v">0</span></div>
@@ -104,11 +105,18 @@ body{font-family:'SF Mono','Cascadia Code','Noto Sans SC','Segoe UI',monospace,s
 <div class="rw"><label>降噪</label><select id="denoise" onchange="upd('denoise',this.value)"><option value="0">关</option><option value="1">开</option></select></div>
 </div>
 
+<div class="cd"><h3>对焦</h3>
+<div class="rw"><label>AF</label><select id="af_mode" onchange="upd('af_mode',this.value)"><option value="1">自动</option><option value="0">手动</option></select></div>
+<div class="rw"><label>焦距</label><input type="range" id="focus_pos" min="0" max="1023" value="512" oninput="upd('focus_pos',this.value)"><span class="vl" id="focus_pos-v">512</span></div>
+<div class="rw" id="focus_hint" style="display:none"><label></label><span style="font-size:.6rem;color:var(--muted)">AF 模式下不可调</span></div>
+</div>
+
 </div></div>
 
 <div class="ft">
 <span>IP: <span id="sip">--</span></span>
-<span>信号: <span id="srssi">--</span></span>
+<span><span id="sssid">--</span> <span id="srssi">--</span></span>
+<span><span id="sbw">--</span></span>
 <span>CPU: <span id="scpu">--</span></span>
 <span>温度: <span id="stemp">--</span></span>
 <span>PSRAM: <span id="spsram">--</span></span>
@@ -124,9 +132,11 @@ var S=location.hostname,IM=document.getElementById('stream'),TS=document.getElem
 document.addEventListener('DOMContentLoaded',function(){IM.src=SP+'?'+Date.now();P();setInterval(P,2000)})
 function snap(){var a=document.createElement('a');a.download='cam_'+Date.now()+'.jpg';a.href='/capture?'+Date.now();a.click();T('已保存')}
 function upd(k,v){var e=document.getElementById(k+'-v');if(e)e.textContent=v;fetch('/set?'+k+'='+v).then(function(r){return r.json()}).then(function(d){if(d.error)T('失败')})}
+function afSync(v){var fp=document.getElementById('focus_pos');if(v==1){fp.disabled=true;document.getElementById('focus_hint').style.display='flex'}else{fp.disabled=false;document.getElementById('focus_hint').style.display='none'}}
+document.addEventListener('change',function(e){if(e.target&&e.target.id=='af_mode')afSync(e.target.value)})
 function sr(r){var b=document.querySelectorAll('.rg .btn');for(var i=0;i<b.length;i++)b[i].classList.remove('on');document.getElementById('rb'+r).classList.add('on');fetch('/set?framesize='+r).then(function(){IM.src=SP+'?'+Date.now();T('已切换')})}
 function T(m){TS.textContent=m;TS.className='ts s';setTimeout(function(){TS.className='ts'},2500)}
-function P(){fetch('/status').then(function(r){return r.json()}).then(function(d){if(d.fps)document.getElementById('fps').textContent=d.fps+'FPS';if(d.resolution)document.getElementById('res').textContent=d.resolution;if(d.ip)document.getElementById('sip').textContent=d.ip;if(d.rssi)document.getElementById('srssi').textContent=d.rssi+'dBm';if(d.cpu)document.getElementById('scpu').textContent=d.cpu;if(d.temp)document.getElementById('stemp').textContent=d.temp;if(d.psram)document.getElementById('spsram').textContent=d.psram;if(d.free_heap)document.getElementById('sram').textContent=(d.free_heap/1024).toFixed(0)+'KB';if(d.uptime)document.getElementById('sup').textContent=d.uptime;if(d.settings){Object.keys(d.settings).forEach(function(k){var el=document.getElementById(k),vl=document.getElementById(k+'-v');if(el&&d.settings[k]!==undefined){el.value=d.settings[k];if(vl)vl.textContent=d.settings[k]}})}})}
+function P(){fetch('/status').then(function(r){return r.json()}).then(function(d){if(d.fps)document.getElementById('fps').textContent=d.fps+'FPS';if(d.resolution)document.getElementById('res').textContent=d.resolution;if(d.ip)document.getElementById('sip').textContent=d.ip;if(d.ssid)document.getElementById('sssid').textContent=d.ssid;if(d.rssi)document.getElementById('srssi').textContent=d.rssi+'dBm';if(d.bw)document.getElementById('sbw').textContent=d.bw;if(d.cpu)document.getElementById('scpu').textContent=d.cpu;if(d.temp)document.getElementById('stemp').textContent=d.temp;if(d.psram)document.getElementById('spsram').textContent=d.psram;if(d.free_heap)document.getElementById('sram').textContent=(d.free_heap/1024).toFixed(0)+'KB';if(d.uptime)document.getElementById('sup').textContent=d.uptime;if(d.settings){Object.keys(d.settings).forEach(function(k){var el=document.getElementById(k),vl=document.getElementById(k+'-v');if(el&&d.settings[k]!==undefined){el.value=d.settings[k];if(vl)vl.textContent=d.settings[k];if(k=='af_mode')afSync(d.settings[k])}})}})}
 </script>
 </body>
 </html>
@@ -138,7 +148,7 @@ CameraWebServer::CameraWebServer()
     : _ctrl_srv(nullptr), _stream_srv(nullptr), _wifiCb(nullptr)
 {
     _inst = this;
-    _settings = { FRAMESIZE_UXGA,6, 0,0,0,0,0, 0,1,0, 0,5, 1,0 };
+    _settings = { FRAMESIZE_VGA,12, 0,0,0,0,0, 0,1,0, 0,0, 1,0, 1,512 };
 }
 
 CameraWebServer::~CameraWebServer() {
@@ -221,10 +231,21 @@ esp_err_t CameraWebServer::handleStream(httpd_req_t *r) {
     httpd_resp_set_hdr(r, "Cache-Control", "no-store");
     httpd_resp_set_hdr(r, "Access-Control-Allow-Origin", "*");
     esp_err_t res;
+    int af_cnt = 0;
     while (true) {
+        // 每 150 帧重新触发自动对焦
+        if (++af_cnt >= 150 && _settings.af_mode == 1) {
+            af_cnt = 0;
+            sensor_t *s = esp_camera_sensor_get();
+            if (s) {
+                s->set_reg(s, 0x3022, 0xFF, 0x04);  // 单次对焦
+                s->set_reg(s, 0x3022, 0xFF, 0x08);  // 连续对焦
+            }
+        }
         camera_fb_t *fb = esp_camera_fb_get();
         if (!fb) { delay(5); continue; }
         g_frame_count++;
+        g_bytes_sent += fb->len;
         char hdr[160];
         int hlen = snprintf(hdr, sizeof(hdr),
             "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
@@ -255,6 +276,7 @@ esp_err_t CameraWebServer::handleSet(httpd_req_t *r) {
             Q(awb_gain,awb_gain) Q(wb_mode,wb_mode)
             Q(aec_value,aec_value) Q(agc_gain,agc_gain)
             Q(hmirror,hmirror) Q(vflip,vflip)
+            Q(af_mode,af_mode) Q(focus_pos,focus_pos)
             #undef Q
         }
         free(buf);
@@ -293,6 +315,22 @@ bool CameraWebServer::applySettings() {
     else { S(set_exposure_ctrl,1); }
     if (_settings.agc_gain > 0) { S(set_gain_ctrl,0); S(set_agc_gain,_settings.agc_gain); }
     else { S(set_gain_ctrl,1); }
+
+    // OV5640 自动对焦控制
+    if (_settings.af_mode == 1) {
+        // 完整 AF 启动序列
+        s->set_reg(s, 0x3022, 0xFF, 0x02);   // 初始化
+        delay(20);
+        s->set_reg(s, 0x3022, 0xFF, 0x04);   // 单次对焦
+        delay(30);
+        s->set_reg(s, 0x3022, 0xFF, 0x08);   // 连续对焦
+    } else {
+        // 手动对焦
+        s->set_reg(s, 0x3022, 0xFF, 0x00);   // 关闭 AF
+        delay(5);
+        s->set_reg(s, 0x3024, 0xFF, _settings.focus_pos & 0xFF);       // VCM 低位
+        s->set_reg(s, 0x3025, 0xFF, (_settings.focus_pos >> 8) & 0x03); // VCM 高位
+    }
     #undef S
     return true;
 }
@@ -301,20 +339,27 @@ String CameraWebServer::genStatusJSON() {
     StaticJsonDocument<1024> doc;
     static unsigned long last = 0;
     static uint32_t last_cnt = 0;
+    static uint32_t last_bytes = 0;
     static int fps = 0;
+    static float bw = 0;
     uint32_t now_cnt = g_frame_count;
+    uint32_t now_bytes = g_bytes_sent;
     unsigned long now = millis();
     if (now - last > 1000) {
         fps = (now_cnt - last_cnt) * 1000 / (now - last);
+        bw = (float)(now_bytes - last_bytes) * 1000.0f / (now - last) / 1024.0f;
         last_cnt = now_cnt;
+        last_bytes = now_bytes;
         last = now;
     }
     doc["fps"] = fps;
+    doc["bw"] = String(bw, 1) + "KB/s";
     const char *rn[] = {"96x96","QQVGA","QCIF","HQVGA","QVGA","CIF","VGA","SVGA","XGA","HD","SXGA","UXGA","FHD","QXGA","QSXGA"};
     if (_settings.framesize>=0 && _settings.framesize<=14) doc["resolution"] = rn[_settings.framesize];
     doc["ip"] = WiFi.localIP().toString();
     doc["rssi"] = WiFi.RSSI();
-    doc["cpu"] = String(ESP.getCpuFreqMHz())+"MHz · CH"+String(WiFi.channel());
+    doc["ssid"] = WiFi.SSID();
+doc["cpu"] = String(ESP.getCpuFreqMHz())+"MHz · CH"+String(WiFi.channel());
     // 芯片温度 (ESP32-S3 内置温度传感器)
     doc["temp"] = String(temperatureRead(), 1)+"°C";
     doc["psram"] = String(ESP.getFreePsram()/1024)+"KB";
@@ -328,5 +373,6 @@ String CameraWebServer::genStatusJSON() {
     sk["awb_gain"]=_settings.awb_gain; sk["wb_mode"]=_settings.wb_mode;
     sk["aec_value"]=_settings.aec_value; sk["agc_gain"]=_settings.agc_gain;
     sk["hmirror"]=_settings.hmirror; sk["vflip"]=_settings.vflip;
+    sk["af_mode"]=_settings.af_mode; sk["focus_pos"]=_settings.focus_pos;
     String out; serializeJson(doc, out); return out;
 }

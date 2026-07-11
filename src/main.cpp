@@ -50,8 +50,8 @@
 // ============================================================
 // WiFi 配置 (修改为你自己的网络)
 // ============================================================
-const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID       = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD   = "YOUR_WIFI_PASSWORD";
 
 // 当 STA 连接失败时启动 AP 热点
 const char* AP_SSID         = "ESP32-CAM-OV5640";
@@ -95,8 +95,8 @@ bool initCamera()
     Serial.printf("[Camera] PSRAM: %s\n", ESP.getPsramSize() > 0 ? "可用" : "不可用");
 
     // OV5640 JPEG 初始化
-    s->set_framesize(s, FRAMESIZE_UXGA);
-    s->set_quality(s, 6);
+    s->set_framesize(s, FRAMESIZE_VGA);
+    s->set_quality(s, 12);
     s->set_brightness(s, 0);
     s->set_contrast(s, 0);
     s->set_saturation(s, 0);
@@ -132,6 +132,18 @@ bool initCamera()
     s->set_reg(s, 0x5188, 0xFF, 0x20);   // AWB 绿增益
 
     Serial.println("[Camera] OV5640 颜色校准完成!");
+
+    // OV5640 自动对焦初始化
+    Serial.println("[Camera] 对焦初始化中...");
+    s->set_reg(s, 0x3000, 0xFF, 0x20);   // 使能 SCCB 传感器控制
+    delay(10);
+    s->set_reg(s, 0x3022, 0xFF, 0x02);   // AF 初始化
+    delay(30);
+    s->set_reg(s, 0x3022, 0xFF, 0x04);   // 单次对焦
+    delay(50);
+    s->set_reg(s, 0x3022, 0xFF, 0x08);   // 连续自动对焦
+    delay(10);
+    Serial.println("[Camera] 自动对焦已启动");
 
     Serial.println("[Camera] OV5640 初始化成功!");
     return true;

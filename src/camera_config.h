@@ -71,7 +71,7 @@ static camera_config_t camera_config = {
 
     // 帧尺寸: OV5640 最大支持 2592x1944 (5MP)
     // 根据需求选择合适的分辨率
-    .frame_size     = FRAMESIZE_UXGA,   // 1600x1200 - 默认
+    .frame_size     = FRAMESIZE_VGA,    // 640x480 - 默认
     // 可选尺寸:
     // FRAMESIZE_QQVGA   - 160x120
     // FRAMESIZE_QVGA    - 320x240
