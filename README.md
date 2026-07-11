@@ -6,6 +6,8 @@
 ![框架](https://img.shields.io/badge/框架-Arduino-green)
 ![协议](https://img.shields.io/badge/协议-MJPEG-orange)
 
+**预配置 WiFi: CMCC-577v, 通电即连。**
+
 ---
 
 ## 界面截图
@@ -80,14 +82,13 @@ pip install platformio
 # 或使用 VSCode 扩展: 搜索 "PlatformIO IDE"
 ```
 
-### 2. 配置 WiFi
+### 2. 通电
 
-编辑 `src/main.cpp`，修改 WiFi 信息：
+设备预配置 CMCC-577v，通电后自动连接。如需切换 WiFi：
 
-```cpp
-const char* WIFI_SSID     = "你的WiFi名称";
-const char* WIFI_PASSWORD = "你的WiFi密码";
-```
+1. 设备开热点时连 `ESP32-CAM-OV5640`（密码 `12345678`）
+2. 打开 http://192.168.4.1
+3. 点击 **📶 WiFi**，填入新网络保存
 
 ### 3. 编译 & 刷入
 
@@ -224,5 +225,3 @@ MIT License
 
 ---
 
-*该项目由 [Claude (Anthropic)](https://claude.ai) 与 [Driver-93](https://github.com/Driver-93) 协作完成。*
-*模型: deepseek-v4-flash | 对话 token 消耗: 约 150K+ (output tokens)*
