@@ -17,7 +17,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>ESP32-CAM · 监控终端</title>
 <style>
-:root{--bg:#0b0d12;--card:#12151c;--accent:#3b82f6;--text:#c8ccd4;--muted:#4d5363;--bd:#1a1e26}
+:root{--bg:#0a0c10;--card:#111318;--accent:#d97706;--text:#c8ccd4;--muted:#4d5363;--bd:#1a1d24}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'SF Mono','Cascadia Code','Noto Sans SC','Segoe UI',monospace,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:13px;line-height:1.5}
 ::selection{background:var(--accent);color:#fff}
@@ -32,7 +32,8 @@ body{font-family:'SF Mono','Cascadia Code','Noto Sans SC','Segoe UI',monospace,s
 .v img{width:100%;display:block;background:#000;aspect-ratio:4/3;object-fit:contain}
 .ov{position:absolute;bottom:0;left:0;right:0;height:34px;background:rgba(12,14,18,.88);border-top:1px solid rgba(255,255,255,.06);display:flex;align-items:center;padding:0 8px;gap:4px}
 .btn{height:24px;padding:0 10px;border:none;font-family:inherit;font-size:.65rem;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:3px;text-transform:uppercase;letter-spacing:.05em;transition:all .1s}
-.bp{background:var(--accent);color:#fff}.bp:hover{background:#2563eb}
+.bp{background:var(--accent);color:#fff}.bp:hover{background:#b45309}
+.dr{background:#78350f;color:#fff;border:1px solid var(--accent)}.dr:hover{background:#451a03}
 .sec{margin-top:12px}
 .st2{font-size:.6rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;padding-left:1px;font-weight:500}
 .g{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:1px;border:1px solid var(--bd);background:var(--bd)}
@@ -70,6 +71,7 @@ body{font-family:'SF Mono','Cascadia Code','Noto Sans SC','Segoe UI',monospace,s
 </div>
 <div class="ov">
 <button class="btn bp" onclick="snap()">📸 拍照</button>
+<button class="btn dr" onclick="rst()">↻ 重启</button>
 </div>
 </div>
 
@@ -136,6 +138,7 @@ function upd(k,v){var e=document.getElementById(k+'-v');if(e)e.textContent=v;fet
 function afSync(v){var fp=document.getElementById('focus_pos');if(v==1){fp.disabled=true;document.getElementById('focus_hint').style.display='flex'}else{fp.disabled=false;document.getElementById('focus_hint').style.display='none'}}
 document.addEventListener('change',function(e){if(e.target&&e.target.id=='af_mode')afSync(e.target.value)})
 function sr(r){var b=document.querySelectorAll('.rg .btn');for(var i=0;i<b.length;i++)b[i].classList.remove('on');document.getElementById('rb'+r).classList.add('on');fetch('/set?framesize='+r).then(function(){IM.src=SP+'?'+Date.now();T('已切换')})}
+function rst(){if(confirm('确定重启设备?')){fetch('/restart').then(function(){T('重启中...')})}}
 function T(m){TS.textContent=m;TS.className='ts s';setTimeout(function(){TS.className='ts'},2500)}
 function P(){fetch('/status').then(function(r){return r.json()}).then(function(d){if(d.fps)document.getElementById('fps').textContent=d.fps+'FPS';if(d.resolution)document.getElementById('res').textContent=d.resolution;if(d.ip)document.getElementById('sip').textContent=d.ip;if(d.ssid)document.getElementById('sssid').textContent=d.ssid;if(d.rssi)document.getElementById('srssi').textContent=d.rssi+'dBm';if(d.bw)document.getElementById('sbw').textContent=d.bw;if(d.cpu)document.getElementById('scpu').textContent=d.cpu;if(d.temp)document.getElementById('stemp').textContent=d.temp;if(d.psram)document.getElementById('spsram').textContent=d.psram;if(d.free_heap)document.getElementById('sram').textContent=(d.free_heap/1024).toFixed(0)+'KB';if(d.uptime)document.getElementById('sup').textContent=d.uptime;if(d.settings){Object.keys(d.settings).forEach(function(k){var el=document.getElementById(k),vl=document.getElementById(k+'-v');if(el&&d.settings[k]!==undefined){el.value=d.settings[k];if(vl)vl.textContent=d.settings[k];if(k=='af_mode')afSync(d.settings[k])}})}})}
 </script>
@@ -179,6 +182,7 @@ void CameraWebServer::begin(int port) {
         reg(_ctrl_srv, "/capture",  HTTP_GET, _capture_h);
         reg(_ctrl_srv, "/set",      HTTP_GET, _set_h);
         reg(_ctrl_srv, "/status",   HTTP_GET, _status_h);
+        reg(_ctrl_srv, "/restart",  HTTP_GET, _restart_h);
         Serial.printf("[HTTP] 控制 :%d\n", port);
     } else {
         Serial.println("[HTTP] 控制服务器失败");
@@ -297,11 +301,20 @@ esp_err_t CameraWebServer::handleSet(httpd_req_t *r) {
     return ESP_OK;
 }
 
+esp_err_t CameraWebServer::_restart_h(httpd_req_t *r) { return _inst ? _inst->handleRestart(r) : ESP_FAIL; }
+
 esp_err_t CameraWebServer::handleStatus(httpd_req_t *r) {
     String j = genStatusJSON();
     httpd_resp_set_type(r, "application/json");
     httpd_resp_set_hdr(r, "Cache-Control", "no-store");
     httpd_resp_sendstr(r, j.c_str());
+    return ESP_OK;
+}
+
+esp_err_t CameraWebServer::handleRestart(httpd_req_t *r) {
+    httpd_resp_sendstr(r, "{\"ok\":1}");
+    delay(100);
+    ESP.restart();
     return ESP_OK;
 }
 

@@ -41,12 +41,14 @@ private:
     static esp_err_t _capture_h(httpd_req_t *r);
     static esp_err_t _set_h(httpd_req_t *r);
     static esp_err_t _status_h(httpd_req_t *r);
+    static esp_err_t _restart_h(httpd_req_t *r);
 
     esp_err_t handleRoot(httpd_req_t *r);
     esp_err_t handleStream(httpd_req_t *r);
     esp_err_t handleCapture(httpd_req_t *r);
     esp_err_t handleSet(httpd_req_t *r);
     esp_err_t handleStatus(httpd_req_t *r);
+    esp_err_t handleRestart(httpd_req_t *r);
 
     bool applySettings();
     String genStatusJSON();
