@@ -1,0 +1,215 @@
+# ESP32-S3 + OV5640 网络摄像头
+
+基于 ESP32-S3 和 OV5640 (5MP) 摄像头的 WiFi 网络摄像头。支持 MJPEG 视频流、拍照、摄像头参数实时调节。
+
+![架构图](https://img.shields.io/badge/ESP32--S3-OV5640-blue)
+![框架](https://img.shields.io/badge/框架-Arduino-green)
+![协议](https://img.shields.io/badge/协议-MJPEG-orange)
+
+---
+
+## 功能特性
+
+- **MJPEG 视频流** — 浏览器直接查看实时画面
+- **拍照** — 一键拍照并下载 JPEG 图片
+- **分辨率切换** — QVGA(320×240) ~ UXGA(1600×1200)
+- **参数调节** — 亮度、对比度、饱和度、锐度、白平衡、曝光等
+- **双模式 WiFi** — STA 连接路由 + AP 热点备份
+- **Web 端 WiFi 重配** — 运行时通过网页更换 WiFi
+- **自动重启保护** — 内存不足时自动恢复
+
+## 硬件接线
+
+### OV5640 → ESP32-S3
+
+| OV5640 引脚 | ESP32-S3 GPIO | 说明 |
+|-------------|---------------|------|
+| PWDN        | GND (或 NC)   | 电源关闭 (拉低使能) |
+| RESET       | GND (或 NC)   | 复位 |
+| XCLK        | **GPIO15**    | 主时钟 (20MHz) |
+| SIOD        | **GPIO4**     | I2C 数据线 |
+| SIOC        | **GPIO5**     | I2C 时钟线 |
+| Y9 (D9)     | **GPIO16**    | 数据位 9 |
+| Y8 (D8)     | **GPIO17**    | 数据位 8 |
+| Y7 (D7)     | **GPIO18**    | 数据位 7 |
+| Y6 (D6)     | **GPIO12**    | 数据位 6 |
+| Y5 (D5)     | **GPIO10**    | 数据位 5 |
+| Y4 (D4)     | **GPIO8**     | 数据位 4 |
+| Y3 (D3)     | **GPIO9**     | 数据位 3 |
+| Y2 (D2)     | **GPIO11**    | 数据位 2 |
+| VSYNC       | **GPIO6**     | 帧同步 |
+| HREF        | **GPIO7**     | 行同步 |
+| PCLK        | **GPIO13**    | 像素时钟 |
+
+> **⚠️ 重要：**
+> - OV5640 功耗约 150~200mA，**不要直接从 ESP32-S3 的 3.3V 引脚供电**，需独立 LDO 供电
+> - 确保 ESP32-S3 模组 **带 PSRAM**（推荐 8MB）
+> - 接线尽量短，数据线建议等长
+
+### 常见开发板引脚差异
+
+| 开发板 | XCLK | SIOD | SIOC | Y9 | Y8 | Y7 | Y6 | Y5 | Y4 | Y3 | Y2 | VSYNC | HREF | PCLK | PWDN | RESET |
+|--------|------|------|------|----|----|----|----|----|----|----|----|-------|------|------|------|-------|
+| **默认 (本项目)** | 15 | 4 | 5 | 16 | 17 | 18 | 12 | 10 | 8 | 9 | 11 | 6 | 7 | 13 | -1 | -1 |
+| Seeed XIAO S3 | 10 | 4 | 5 | 16 | 17 | 18 | 12 | 11 | 48 | 47 | 21 | 6 | 7 | 13 | 1 | 2 |
+| Freenove S3 | 15 | 4 | 5 | 16 | 17 | 18 | 12 | 10 | 8 | 9 | 11 | 6 | 7 | 13 | -1 | 0 |
+
+> 如需修改，编辑 `src/camera_config.h` 中的引脚定义。
+
+## 快速开始
+
+### 1. 安装 PlatformIO
+
+```bash
+# 安装 PlatformIO Core (如果还没有)
+pip install platformio
+
+# 或使用 VSCode 扩展: 搜索 "PlatformIO IDE"
+```
+
+### 2. 配置 WiFi
+
+编辑 `src/main.cpp`，修改 WiFi 信息：
+
+```cpp
+const char* WIFI_SSID     = "你的WiFi名称";
+const char* WIFI_PASSWORD = "你的WiFi密码";
+```
+
+### 3. 编译 & 刷入
+
+```bash
+cd esp32-camera-web
+
+# 编译
+pio run
+
+# 刷入 (USB 连接)
+pio run --target upload
+
+# 查看串口日志
+pio device monitor
+```
+
+### 4. 浏览器访问
+
+打开串口监视器查看输出，找到类似信息：
+
+```
+==================================
+  ESP32-S3 摄像头已就绪!
+==================================
+  局域网: http://192.168.1.123
+==================================
+```
+
+浏览器打开 `http://192.168.1.123` 即可看到摄像头画面。
+
+### 5. （可选）首次配置WiFi
+
+如果连接 WiFi 失败，ESP32 会自动启动 AP 热点：
+
+- **SSID:** `ESP32-CAM-OV5640`
+- **密码:** `12345678`
+
+连接热点后访问 `http://192.168.4.1`，然后在页面底部的 WiFi 配置区输入你的网络信息。
+
+## 项目结构
+
+```
+esp32-camera-web/
+├── platformio.ini          # PlatformIO 项目配置
+├── sdkconfig.defaults      # ESP-IDF 默认配置
+├── README.md               # 本文档
+└── src/
+    ├── main.cpp            # 主程序入口
+    ├── camera_config.h     # 摄像头引脚 & 初始化配置
+    ├── web_server.h        # Web 服务器头文件
+    └── web_server.cpp      # Web 服务器实现 (HTTP + MJPEG 流)
+```
+
+## Web API 接口
+
+| 路径 | 方法 | 说明 |
+|------|------|------|
+| `/` | GET | Web 管理页面 |
+| `/stream` | GET | MJPEG 视频流 |
+| `/capture` | GET | 拍照 (返回 JPEG) |
+| `/set?key=value` | GET | 设置摄像头参数 |
+| `/status` | GET | 获取系统状态 (JSON) |
+| `/wificonfig?ssid=xxx&password=xxx` | GET | 配置 WiFi |
+| `/restart` | GET | 重启设备 |
+
+### 摄像头参数 (`/set`)
+
+| 参数名 | 范围 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `framesize` | 0-14 | 4 (VGA) | 分辨率索引 |
+| `quality` | 6-63 | 12 | JPEG 质量 (越小越好) |
+| `brightness` | -2 ~ 2 | 0 | 亮度 |
+| `contrast` | -2 ~ 2 | 0 | 对比度 |
+| `saturation` | -2 ~ 2 | 0 | 饱和度 |
+| `sharpness` | -3 ~ 3 | 0 | 锐度 |
+| `denoise` | 0-1 | 0 | 降噪 |
+| `ae_level` | -2 ~ 2 | 0 | 自动曝光补偿 |
+| `awb_gain` | 0-1 | 1 | 自动白平衡 |
+| `wb_mode` | 0-4 | 0 | 白平衡模式 |
+| `aec_value` | 0-1200 | 0 | 曝光值 (0=自动) |
+| `agc_gain` | 0-30 | 5 | 自动增益控制 |
+| `hmirror` | 0-1 | 0 | 水平镜像 |
+| `vflip` | 0-1 | 0 | 垂直翻转 |
+
+### 分辨率索引 (framesize)
+
+| 值 | 名称 | 分辨率 |
+|----|------|--------|
+| 0 | 96×96 | 96×96 |
+| 1 | QQVGA | 160×120 |
+| 2 | QVGA | 320×240 |
+| 3 | CIF | 400×296 |
+| 4 | **VGA** | **640×480** |
+| 5 | SVGA | 800×600 |
+| 6 | XGA | 1024×768 |
+| 7 | SXGA | 1280×1024 |
+| 8 | UXGA | 1600×1200 |
+
+## 故障排除
+
+### 摄像头初始化失败
+
+```
+[Camera] 初始化失败! 错误码: 0x2003
+```
+
+1. **检查供电** — OV5640 需要独立 3.3V LDO
+2. **检查 PSRAM** — 确保开发板有 PSRAM，且在 `platformio.ini` 中启用
+3. **检查接线** — 特别是 SIOD/SIOC (I2C) 线
+4. **尝试降低 XCLK** — 在 `camera_config.h` 中将 `xclk_freq_hz` 改为 `10000000`
+
+### 画面偏色
+
+通过 Web 界面调整白平衡模式，或尝试：
+- 设置 `awb_gain=1` (自动白平衡)
+- 在不同光照条件下选择合适的 `wb_mode`
+
+### 画面有条纹/闪烁
+
+- 在 50Hz 地区：使用荧光灯白平衡模式
+- 尝试调整 `xclk_freq_hz` 为 10MHz 或 16.5MHz
+
+## 性能参考 (VGA@640×480)
+
+| 设置 | 帧率 |
+|------|------|
+| Quality=12 | ~15 FPS |
+| Quality=20 | ~20 FPS |
+| Quality=40 | ~25 FPS |
+
+## 许可证
+
+MIT License
+
+---
+
+*该项目由 [Claude (Anthropic)](https://claude.ai) 与 [Driver-93](https://github.com/Driver-93) 协作完成。*
+*模型: deepseek-v4-flash | 对话 token 消耗: 约 150K+ (output tokens)*
