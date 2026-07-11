@@ -7,7 +7,7 @@
  *   - WiFi 连接 (STA + AP 双模式)
  *   - Web 界面: MJPEG 视频流、拍照、参数调节
  *   - 分辨率切换 (QVGA ~ UXGA, 最大 2592×1944)
- *   - 运行时 WiFi 重配置
+ *   - 运行时 WiFi 重配置 (保存到 NVS)
  *
  * 接线参考 (ESP32-S3 + OV5640):
  *
@@ -34,24 +34,21 @@
  *   - 确保摄像头供电充足 (3.3V / 150mA+)
  *   - 必须启用 PSRAM (推荐 8MB)
  *   - 使用前修改下方 WIFI_SSID / WIFI_PASSWORD
- *
- * 使用:
- *   1. PlatformIO 编译并刷入
- *   2. 打开串口监视器查看 IP
- *   3. 浏览器访问 http://<ip>
  */
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <Preferences.h>
 #include <esp_camera.h>
 #include "camera_config.h"
 #include "web_server.h"
 
 // ============================================================
-// WiFi 配置 (修改为你自己的网络)
+// WiFi 配置 (硬编码仅作首次连接用, 网页保存后持久化到 NVS)
+// 设为空字符串则首次启动直接开热点
 // ============================================================
-const char* WIFI_SSID       = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD   = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID       = "";
+const char* WIFI_PASSWORD   = "";
 
 // 当 STA 连接失败时启动 AP 热点
 const char* AP_SSID         = "ESP32-CAM-OV5640";
@@ -69,6 +66,7 @@ CameraWebServer camServer;
 bool initCamera();
 void initWiFi();
 void initWebServer();
+
 // ============================================================
 // 摄像头初始化
 // ============================================================
@@ -76,7 +74,6 @@ bool initCamera()
 {
     Serial.println("[Camera] 初始化 OV5640 ...");
 
-    // 配置摄像头引脚 (在 camera_config.h 中定义)
     esp_err_t err = esp_camera_init(&camera_config);
     if (err != ESP_OK) {
         Serial.printf("[Camera] 初始化失败! 错误码: 0x%x\n", err);
@@ -90,11 +87,9 @@ bool initCamera()
         return false;
     }
 
-    // 打印传感器信息
     Serial.printf("[Camera] 型号: OV%04x\n", s->id.PID);
     Serial.printf("[Camera] PSRAM: %s\n", ESP.getPsramSize() > 0 ? "可用" : "不可用");
 
-    // OV5640 JPEG 初始化
     s->set_framesize(s, FRAMESIZE_VGA);
     s->set_quality(s, 12);
     s->set_brightness(s, 0);
@@ -102,46 +97,25 @@ bool initCamera()
     s->set_saturation(s, 0);
     s->set_sharpness(s, 0);
     s->set_denoise(s, 0);
-    s->set_whitebal(s, 1);
-    s->set_wb_mode(s, 0);
-    s->set_ae_level(s, 0);
-    s->set_hmirror(s, 1);  // 默认镜像翻转
-    s->set_vflip(s, 0);
-
-    // OV5640 颜色优化 - 关键: 0x5001 不能旁路 ISP!
-    Serial.println("[Camera] OV5640 颜色校准中...");
-
-    // 通过标准 API 设置
-    s->set_exposure_ctrl(s, 1);
-    s->set_gain_ctrl(s, 1);
-    s->set_whitebal(s, 1);       // 自动白平衡
-    s->set_awb_gain(s, 1);       // AWB 增益
-    s->set_saturation(s, 0);     // 默认饱和度
-    s->set_brightness(s, 0);
-    s->set_contrast(s, 0);
-    s->set_sharpness(s, 0);
-    s->set_denoise(s, 0);
 
     // ISP 完整开启 (0x3F = 启用所有 ISP 模块, bit7=0 不旁路)
     s->set_reg(s, 0x5001, 0xFF, 0x3F);
     delay(10);
 
-    // 颜色矩阵保持默认, 仅设 AWB 增益
     s->set_reg(s, 0x5186, 0xFF, 0x20);   // AWB 蓝增益
     s->set_reg(s, 0x5187, 0xFF, 0x20);   // AWB 红增益
     s->set_reg(s, 0x5188, 0xFF, 0x20);   // AWB 绿增益
-
     Serial.println("[Camera] OV5640 颜色校准完成!");
 
     // OV5640 自动对焦初始化
     Serial.println("[Camera] 对焦初始化中...");
-    s->set_reg(s, 0x3000, 0xFF, 0x20);   // 使能 SCCB 传感器控制
+    s->set_reg(s, 0x3000, 0xFF, 0x20);
     delay(10);
-    s->set_reg(s, 0x3022, 0xFF, 0x02);   // AF 初始化
+    s->set_reg(s, 0x3022, 0xFF, 0x02);
     delay(30);
-    s->set_reg(s, 0x3022, 0xFF, 0x04);   // 单次对焦
+    s->set_reg(s, 0x3022, 0xFF, 0x04);
     delay(50);
-    s->set_reg(s, 0x3022, 0xFF, 0x08);   // 连续自动对焦
+    s->set_reg(s, 0x3022, 0xFF, 0x08);
     delay(10);
     Serial.println("[Camera] 自动对焦已启动");
 
@@ -150,7 +124,7 @@ bool initCamera()
 }
 
 // ============================================================
-// WiFi 初始化
+// WiFi 初始化 - 优先用 NVS 保存的凭证, 硬编码仅作回退
 // ============================================================
 void initWiFi()
 {
@@ -160,31 +134,63 @@ void initWiFi()
     WiFi.setSleep(false);
     WiFi.setHostname("esp32-cam-ov5640");
 
-    // 连接 WiFi
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    // 第一步: 从 Preferences 读取网页保存的凭证
+    Preferences pref;
+    pref.begin("wificfg", true);
+    String savedSsid = pref.getString("ssid", "");
+    String savedPass = pref.getString("pass", "");
+    pref.end();
 
-    // 等待连接 (最多 15 秒)
-    int timeout = 15;
-    while (WiFi.status() != WL_CONNECTED && timeout > 0) {
-        delay(1000);
-        Serial.print(".");
-        timeout--;
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("\n[WiFi] STA 连接成功!");
-        Serial.printf("[WiFi] IP: %s / RSSI: %d dBm\n",
-            WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    String useSsid, usePass;
+    if (savedSsid.length() > 0) {
+        useSsid = savedSsid;
+        usePass = savedPass;
+        Serial.printf("[WiFi] 尝试保存的凭证: %s\n", useSsid.c_str());
     } else {
-        Serial.println("\n[WiFi] STA 连接失败, 启动 AP 热点");
-
-        // 创建热点 (无需密码时可传 NULL)
-        WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL);
-        delay(500);
-
-        Serial.printf("[WiFi] AP: %s / IP: %s\n",
-            AP_SSID, WiFi.softAPIP().toString().c_str());
+        useSsid = WIFI_SSID;
+        usePass = WIFI_PASSWORD;
+        Serial.printf("[WiFi] 尝试硬编码: %s\n", useSsid.c_str());
     }
+
+    if (useSsid.length() > 0) {
+        WiFi.persistent(false);  // 不让 WiFi 栈 NVS 干扰
+        WiFi.begin(useSsid.c_str(), usePass.c_str());
+        int timeout = 15;
+        while (WiFi.status() != WL_CONNECTED && timeout > 0) {
+            delay(1000); Serial.print("."); timeout--;
+        }
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.printf("\n[WiFi] %s 连接成功! IP: %s\n",
+                WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+            return;
+        }
+        Serial.printf("\n[WiFi] %s 连接失败\n", useSsid.c_str());
+
+        // 如果保存的凭证连不上但有硬编码, 重置 WiFi 后回退
+        if (savedSsid.length() > 0 && strlen(WIFI_SSID) > 0 &&
+            savedSsid != WIFI_SSID) {
+            Serial.printf("[WiFi] 回退到硬编码: %s\n", WIFI_SSID);
+            WiFi.disconnect(true);
+            delay(500);
+            WiFi.mode(WIFI_AP_STA);
+            WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+            timeout = 15;
+            while (WiFi.status() != WL_CONNECTED && timeout > 0) {
+                delay(1000); Serial.print("."); timeout--;
+            }
+            if (WiFi.status() == WL_CONNECTED) {
+                Serial.printf("\n[WiFi] %s 回退成功!\n", WiFi.SSID().c_str());
+                return;
+            }
+        }
+    }
+
+    // 都失败, 启动 AP
+    Serial.println("[WiFi] 启动 AP 热点");
+    WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL);
+    delay(500);
+    Serial.printf("[WiFi] AP: %s / IP: %s\n",
+        AP_SSID, WiFi.softAPIP().toString().c_str());
 }
 
 // ============================================================
@@ -192,6 +198,15 @@ void initWiFi()
 // ============================================================
 void initWebServer()
 {
+    camServer.onWiFiConfig([](const char *ssid, const char *pass) {
+        Serial.printf("[WiFi] 保存凭证到 Preferences: %s\n", ssid);
+        Preferences pref;
+        pref.begin("wificfg", false);
+        pref.putString("ssid", ssid);
+        pref.putString("pass", pass);
+        pref.end();
+        Serial.println("[WiFi] 保存成功, 等待重启");
+    });
     camServer.begin(80);
 
     Serial.println("\n==============================");
@@ -225,7 +240,7 @@ void setup()
     Serial.println("==============================\n");
 
     if (!initCamera()) {
-        Serial.println("[系统] 摄像头初始化失败, 以诊断模式运行 (WiFi + Web, 无视频)");
+        Serial.println("[系统] 摄像头初始化失败, 以诊断模式运行");
     }
 
     initWiFi();
@@ -234,7 +249,6 @@ void setup()
 
 void loop()
 {
-    // 系统运行状态打印 (每 60 秒)
     static unsigned long lastReport = 0;
     if (millis() - lastReport > 60000) {
         lastReport = millis();
@@ -242,12 +256,24 @@ void loop()
             ESP.getFreeHeap(), ESP.getPsramSize(), WiFi.RSSI());
     }
 
-    // 低内存保护 (自动重启)
+    // WiFi 保存后延迟重启, 确保 HTTP 响应发出
+    extern volatile bool g_pending_restart;
+    if (g_pending_restart) {
+        static unsigned long restart_at = 0;
+        if (restart_at == 0) {
+            restart_at = millis();
+            Serial.println("[WiFi] 准备重启...");
+        } else if (millis() - restart_at > 3000) {
+            Serial.println("[WiFi] 重启!");
+            ESP.restart();
+        }
+    }
+
     if (ESP.getFreeHeap() < 8192) {
         Serial.println("[警告] 堆内存严重不足, 即将重启");
         delay(1000);
         ESP.restart();
     }
 
-    delay(50);  // 50ms 循环, AF 和状态检查足够了
+    delay(50);
 }

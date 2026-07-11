@@ -12,6 +12,7 @@ CameraWebServer* CameraWebServer::_inst = nullptr;
 static volatile uint32_t g_frame_count = 0;
 static volatile uint32_t g_bytes_sent = 0;
 static volatile int g_stream_token = 0;  // 新客户端连接时递增, 旧客户端退出
+volatile bool g_pending_restart = false;  // WiFi 保存后主循环执行重启
 
 // 前向声明
 static void stream_server_task(void *arg);
@@ -57,6 +58,8 @@ body{font-family:'SF Mono','Cascadia Code','Noto Sans SC','Segoe UI',monospace,s
 .rg .btn{height:24px;padding:0 10px;background:var(--card);color:var(--muted);border:none;font-family:inherit;font-size:.62rem;cursor:pointer;text-transform:uppercase;letter-spacing:.06em}
 .rg .btn.on{background:var(--accent);color:#fff}
 .rg .btn:not(.on):hover{background:#1a1e28}
+.wc{display:none;background:var(--card);padding:10px 12px;margin-bottom:10px;border:1px solid var(--bd)}
+.wc.s{display:block}
 .ft{display:flex;gap:14px;flex-wrap:wrap;font-size:.6rem;color:var(--muted);padding:6px 2px 0;margin-top:6px;border-top:1px solid var(--bd)}
 .ts{position:fixed;bottom:12px;right:12px;background:var(--card);color:var(--text);padding:6px 12px;border:1px solid var(--accent);transform:translateY(50px);opacity:0;transition:.2s;z-index:99;font-size:.68rem;pointer-events:none;font-family:inherit}
 .ts.s{transform:translateY(0);opacity:1}
@@ -79,7 +82,15 @@ body{font-family:'SF Mono','Cascadia Code','Noto Sans SC','Segoe UI',monospace,s
 <div class="ov">
 <button class="btn bp" onclick="snap()">📸 拍照</button>
 <button class="btn dr" onclick="rst()">↻ 重启</button>
+<button class="btn dr" onclick="tw()">📶 WiFi</button>
 </div>
+</div>
+
+<div class="wc" id="wb">
+<div style="color:var(--accent);font-size:.72rem;margin-bottom:6px;font-weight:500">WiFi 配置</div>
+<input type="text" id="ws" placeholder="WiFi 名称" style="width:100%;padding:6px 10px;margin-bottom:6px;background:var(--bg);border:1px solid var(--bd);color:var(--text);font-family:inherit;font-size:.75rem;outline:none">
+<input type="password" id="wp" placeholder="密码" style="width:100%;padding:6px 10px;margin-bottom:6px;background:var(--bg);border:1px solid var(--bd);color:var(--text);font-family:inherit;font-size:.75rem;outline:none">
+<button class="btn bp" onclick="sw()" style="width:100%;height:26px;border:none;font-family:inherit;font-size:.7rem;cursor:pointer">保存并连接</button>
 </div>
 
 <div class="sec"><div class="st2">分辨率</div>
@@ -146,6 +157,8 @@ function afSync(v){var fp=document.getElementById('focus_pos');if(v==1){fp.disab
 document.addEventListener('change',function(e){if(e.target&&e.target.id=='af_mode')afSync(e.target.value)})
 function sr(r){var b=document.querySelectorAll('.rg .btn');for(var i=0;i<b.length;i++)b[i].classList.remove('on');document.getElementById('rb'+r).classList.add('on');fetch('/set?framesize='+r).then(function(){IM.src=SP+'?'+Date.now();T('已切换')})}
 function rst(){if(confirm('确定重启设备?')){fetch('/restart').then(function(){T('重启中...')})}}
+function tw(){document.getElementById('wb').classList.toggle('s')}
+function sw(){var s=document.getElementById('ws').value.trim(),p=document.getElementById('wp').value.trim();if(!s){T('输入 SSID');return}fetch('/wificonfig?ssid='+encodeURIComponent(s)+'&password='+encodeURIComponent(p)).then(function(){T('已保存，重启中…');setTimeout(function(){T('连回新网络后刷新页面')},3000)})}
 function T(m){TS.textContent=m;TS.className='ts s';setTimeout(function(){TS.className='ts'},2500)}
 function P(){fetch('/status').then(function(r){return r.json()}).then(function(d){if(d.fps)document.getElementById('fps').textContent=d.fps+'FPS';if(d.resolution)document.getElementById('res').textContent=d.resolution;if(d.ip)document.getElementById('sip').textContent=d.ip;if(d.ssid)document.getElementById('sssid').textContent=d.ssid;if(d.rssi)document.getElementById('srssi').textContent=d.rssi+'dBm';if(d.bw)document.getElementById('sbw').textContent=d.bw;if(d.cpu)document.getElementById('scpu').textContent=d.cpu;if(d.temp)document.getElementById('stemp').textContent=d.temp;if(d.psram)document.getElementById('spsram').textContent=d.psram;if(d.free_heap)document.getElementById('sram').textContent=(d.free_heap/1024).toFixed(0)+'KB';if(d.uptime)document.getElementById('sup').textContent=d.uptime;if(d.settings){Object.keys(d.settings).forEach(function(k){var el=document.getElementById(k),vl=document.getElementById(k+'-v');if(el&&d.settings[k]!==undefined){el.value=d.settings[k];if(vl)vl.textContent=d.settings[k];if(k=='af_mode')afSync(d.settings[k])}})}})}
 </script>
@@ -189,6 +202,7 @@ void CameraWebServer::begin(int port) {
         reg(_ctrl_srv, "/set",      HTTP_GET, _set_h);
         reg(_ctrl_srv, "/status",   HTTP_GET, _status_h);
         reg(_ctrl_srv, "/restart",  HTTP_GET, _restart_h);
+        reg(_ctrl_srv, "/wificonfig", HTTP_GET, _wificfg_h);
         Serial.printf("[HTTP] 控制 :%d\n", port);
     } else {
         Serial.println("[HTTP] 控制服务器失败");
@@ -343,6 +357,7 @@ esp_err_t CameraWebServer::handleSet(httpd_req_t *r) {
 }
 
 esp_err_t CameraWebServer::_restart_h(httpd_req_t *r) { return _inst ? _inst->handleRestart(r) : ESP_FAIL; }
+esp_err_t CameraWebServer::_wificfg_h(httpd_req_t *r) { return _inst ? _inst->handleWiFi(r) : ESP_FAIL; }
 
 esp_err_t CameraWebServer::handleStatus(httpd_req_t *r) {
     String j = genStatusJSON();
@@ -352,9 +367,33 @@ esp_err_t CameraWebServer::handleStatus(httpd_req_t *r) {
     return ESP_OK;
 }
 
-esp_err_t CameraWebServer::handleRestart(httpd_req_t *r) {
+esp_err_t CameraWebServer::handleWiFi(httpd_req_t *r) {
+    if (!_wifiCb) { httpd_resp_sendstr(r, "{\"ok\":0}"); return ESP_OK; }
+    char ssid[128]={0}, pass[128]={0};
+    size_t bl = httpd_req_get_url_query_len(r) + 1;
+    if (bl > 1) {
+        char *buf = (char*)malloc(bl);
+        if (httpd_req_get_url_query_str(r, buf, bl) == ESP_OK) {
+            httpd_query_key_value(buf, "ssid", ssid, sizeof(ssid));
+            httpd_query_key_value(buf, "password", pass, sizeof(pass));
+        }
+        free(buf);
+    }
+    // 先发响应, 标记重启
+    httpd_resp_set_type(r, "application/json");
     httpd_resp_sendstr(r, "{\"ok\":1}");
-    delay(100);
+    if (strlen(ssid)) {
+        Serial.printf("[WiFi] 保存凭证: %s\n", ssid);
+        _wifiCb(ssid, pass);   // WiFi.begin(ssid, pass) 写入 NVS
+        g_pending_restart = true;  // 主循环执行重启, 确保响应已发出
+    }
+    return ESP_OK;
+}
+
+esp_err_t CameraWebServer::handleRestart(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    httpd_resp_sendstr(r, "{\"ok\":1}");
+    delay(500);
     ESP.restart();
     return ESP_OK;
 }
