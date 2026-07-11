@@ -1,4 +1,5 @@
 #include "web_server.h"
+#include "debug_log.h"
 #include <Preferences.h>
 #include <lwip/sockets.h>
 #include "esp_camera.h"
@@ -85,6 +86,7 @@ body{font-family:'SF Mono','Cascadia Code','Noto Sans SC','Segoe UI',monospace,s
 <button class="btn bp" onclick="snap()">📸 拍照</button>
 <button class="btn dr" onclick="rst()">↻ 重启</button>
 <button class="btn dr" onclick="tw()">📶 WiFi</button>
+      <button class="btn dr" onclick="showLog()">📋 日志</button>
 </div>
 </div>
 
@@ -136,7 +138,8 @@ body{font-family:'SF Mono','Cascadia Code','Noto Sans SC','Segoe UI',monospace,s
 
 </div></div>
 
-<div class="ft">
+<div id="logview" style="display:none;background:var(--card);border:1px solid var(--bd);padding:10px;margin-top:8px;font-size:.65rem;font-family:monospace;white-space:pre-wrap;color:var(--text);max-height:300px;overflow:auto"></div>
+    <div class="ft">
 <span>IP: <span id="sip">--</span></span>
 <span><span id="sssid">--</span> <span id="srssi">--</span></span>
 <span><span id="sbw">--</span></span>
@@ -158,6 +161,7 @@ function upd(k,v){var e=document.getElementById(k+'-v');if(e)e.textContent=v;fet
 function afSync(v){var fp=document.getElementById('focus_pos');if(v==1){fp.disabled=true;document.getElementById('focus_hint').style.display='flex'}else{fp.disabled=false;document.getElementById('focus_hint').style.display='none'}}
 document.addEventListener('change',function(e){if(e.target&&e.target.id=='af_mode')afSync(e.target.value)})
 function sr(r){var b=document.querySelectorAll('.rg .btn');for(var i=0;i<b.length;i++)b[i].classList.remove('on');document.getElementById('rb'+r).classList.add('on');fetch('/set?framesize='+r).then(function(){IM.src=SP+'?'+Date.now();T('已切换')})}
+function showLog(){fetch('/log').then(function(r){return r.text()}).then(function(t){var d=document.getElementById('logview');d.innerHTML=t;d.style.display='block'})}
 function rst(){if(confirm('确定重启设备?')){fetch('/restart').then(function(){T('重启中...')})}}
 function tw(){document.getElementById('wb').classList.toggle('s')}
 function sw(){var s=document.getElementById('ws').value.trim(),p=document.getElementById('wp').value.trim();if(!s){T('输入 SSID');return}T('正在保存…');fetch('/wificonfig?ssid='+encodeURIComponent(s)+'&password='+encodeURIComponent(p)).then(function(){T('已保存，设备即将重启');}).catch(function(){T('保存失败，请重试')})}
@@ -204,6 +208,7 @@ void CameraWebServer::begin(int port) {
         reg(_ctrl_srv, "/set",      HTTP_GET, _set_h);
         reg(_ctrl_srv, "/status",   HTTP_GET, _status_h);
         reg(_ctrl_srv, "/restart",  HTTP_GET, _restart_h);
+        reg(_ctrl_srv, "/log", HTTP_GET, _log_h);
         reg(_ctrl_srv, "/wificonfig", HTTP_GET, _wificfg_h);
         Serial.printf("[HTTP] 控制 :%d\n", port);
     } else {
@@ -359,7 +364,14 @@ esp_err_t CameraWebServer::handleSet(httpd_req_t *r) {
 }
 
 esp_err_t CameraWebServer::_restart_h(httpd_req_t *r) { return _inst ? _inst->handleRestart(r) : ESP_FAIL; }
+esp_err_t CameraWebServer::_log_h(httpd_req_t *r) { return _inst ? _inst->handleLog(r) : ESP_FAIL; }
 esp_err_t CameraWebServer::_wificfg_h(httpd_req_t *r) { return _inst ? _inst->handleWiFi(r) : ESP_FAIL; }
+
+esp_err_t CameraWebServer::handleLog(httpd_req_t *r) {
+    httpd_resp_set_type(r, "text/plain; charset=utf-8");
+    httpd_resp_sendstr(r, log_read().c_str());
+    return ESP_OK;
+}
 
 esp_err_t CameraWebServer::handleStatus(httpd_req_t *r) {
     String j = genStatusJSON();

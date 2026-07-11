@@ -10,6 +10,11 @@
 #include <esp_camera.h>
 #include "camera_config.h"
 #include "web_server.h"
+#include "debug_log.h"
+
+// 双串口: Serial(USB) + Serial0(UART0=TTL)
+HardwareSerial Serial0(0);
+#define DUAL(fmt, ...) do { Serial.printf(fmt, ##__VA_ARGS__); Serial0.printf(fmt, ##__VA_ARGS__); } while(0)
 
 const char* WIFI_SSID       = "";
 const char* WIFI_PASSWORD   = "";
@@ -43,7 +48,7 @@ bool initCamera()
     s->set_reg(s, 0x3022, 0xFF, 0x02); delay(30);
     s->set_reg(s, 0x3022, 0xFF, 0x04); delay(50);
     s->set_reg(s, 0x3022, 0xFF, 0x08); delay(10);
-    Serial.println("[Camera] OK");
+    DUAL("[Camera] OK");
     return true;
 }
 
@@ -52,7 +57,7 @@ bool initCamera()
 // ============================================================
 void initWiFi()
 {
-    Serial.println("\n=== WiFi ===");
+    DUAL("\n=== WiFi ===\n");
     WiFi.mode(WIFI_AP_STA);
     WiFi.setSleep(false);
     WiFi.setHostname("esp32-cam-ov5640");
@@ -108,7 +113,8 @@ void initWiFi()
 void initWebServer()
 {
     camServer.onWiFiConfig([](const char *ssid, const char *pass) {
-        Serial.printf("[WiFi] 保存: %s\n", ssid);
+        DUAL("[WiFi] 保存: %s / %s\n", ssid, pass);
+        log_write((String("Saved: ")+ssid+"/"+pass).c_str());
         Preferences pref;
         pref.begin("camwifi", false);
         pref.putString("ssid", ssid);
@@ -117,17 +123,17 @@ void initWebServer()
         Serial.println("[WiFi] OK");
     });
     camServer.begin(80);
-    Serial.printf("[Web] http://%s\n", WiFi.localIP().toString().c_str());
+    DUAL("[Web] http://%s\n", WiFi.localIP().toString().c_str());
     if (WiFi.getMode() & WIFI_AP)
-        Serial.printf("[Web] AP: http://%s\n", WiFi.softAPIP().toString().c_str());
+        DUAL("[Web] AP: http://%s\n", WiFi.softAPIP().toString().c_str());
 }
 
 void setup()
 {
     Serial.begin(115200);
     delay(500);
-    Serial.printf("\nESP32-S3 + OV5640 | PSRAM: %d\n", ESP.getPsramSize());
-    if (!initCamera()) Serial.println("[Camera] no cam");
+    DUAL("\nESP32-S3 + OV5640 | PSRAM: %d\n", ESP.getPsramSize());
+    if (!initCamera()) DUAL("[Camera] no cam");
     initWiFi();
     initWebServer();
 }
@@ -139,10 +145,11 @@ void loop()
     if (g_pending_restart) {
         if (restart_at == 0) {
             restart_at = millis();
-            Serial.printf("[WiFi] 8s 后重启...\n");
+            DUAL("[WiFi] 8s 后重启...\n");
         }
         if (millis() - restart_at > 8000) {
-            Serial.println("[WiFi] 重启");
+            DUAL("[WiFi] 重启");
+        log_write("Device restarting");
             ESP.restart();
         }
     } else restart_at = 0;
@@ -150,7 +157,7 @@ void loop()
     static unsigned long lastReport = 0;
     if (millis() - lastReport > 60000) {
         lastReport = millis();
-        Serial.printf("[状态] %d %d %d\n", ESP.getFreeHeap(), ESP.getPsramSize(), WiFi.RSSI());
+        DUAL("[状态] %d %d %d\n", ESP.getFreeHeap(), ESP.getPsramSize(), WiFi.RSSI());
     }
     if (ESP.getFreeHeap() < 8192) { delay(1000); ESP.restart(); }
     delay(50);
