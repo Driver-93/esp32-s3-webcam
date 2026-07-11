@@ -249,5 +249,5 @@ void loop()
         ESP.restart();
     }
 
-    delay(100);
+    delay(50);  // 50ms 循环, AF 和状态检查足够了
 }

@@ -72,20 +72,19 @@ static camera_config_t camera_config = {
     // 帧尺寸: OV5640 最大支持 2592x1944 (5MP)
     // 根据需求选择合适的分辨率
     .frame_size     = FRAMESIZE_VGA,    // 640x480 - 默认
-    // 可选尺寸:
-    // FRAMESIZE_QQVGA   - 160x120
-    // FRAMESIZE_QVGA    - 320x240
-    // FRAMESIZE_VGA     - 640x480
-    // FRAMESIZE_SVGA    - 800x600
-    // FRAMESIZE_XGA     - 1024x768
-    // FRAMESIZE_HD      - 1280x720
-    // FRAMESIZE_SXGA    - 1280x1024
-    // FRAMESIZE_UXGA    - 1600x1200
-    // FRAMESIZE_QXGA    - 2048x1536
-    // FRAMESIZE_QSXGA   - 2592x1944
+    // 可选尺寸 (实际值见 sensor.h 枚举):
+    // FRAMESIZE_QQVGA(1)  - 160x120
+    // FRAMESIZE_QVGA(5)   - 320x240
+    // FRAMESIZE_VGA(8)    - 640x480
+    // FRAMESIZE_SVGA(9)   - 800x600
+    // FRAMESIZE_XGA(10)   - 1024x768
+    // FRAMESIZE_HD(11)    - 1280x720
+    // FRAMESIZE_SXGA(12)  - 1280x1024
+    // FRAMESIZE_UXGA(13)  - 1600x1200
+    // FRAMESIZE_QXGA(17)  - 2048x1536
 
     .jpeg_quality   = 12,               // JPEG 质量 0-63 (越低越好)
-    .fb_count       = 2,                // 帧缓冲区数量 (建议 2 用于并发流)
+    .fb_count       = 3,                // 3 帧环形缓冲, 防止发送卡顿导致采集阻塞
     .fb_location    = CAMERA_FB_IN_PSRAM, // 使用 PSRAM 存储帧缓冲
     .grab_mode      = CAMERA_GRAB_LATEST, // 抓取最新帧 (减少延迟)
 };

@@ -7,6 +7,7 @@ CameraWebServer* CameraWebServer::_inst = nullptr;
 // 全局帧计数器 (由流线程递增, 状态查询读取)
 static volatile uint32_t g_frame_count = 0;
 static volatile uint32_t g_bytes_sent = 0;
+static volatile int g_stream_token = 0;  // 新客户端连接时递增, 旧客户端退出
 
 static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -188,9 +189,13 @@ void CameraWebServer::begin(int port) {
     scfg.ctrl_port = 32769;
     scfg.stack_size = 16384;
     scfg.max_uri_handlers = 4;
+    scfg.lru_purge_enable = true;     // 自动清理死连接
+    scfg.send_wait_timeout = 3;       // 发送超时 3 秒
+    scfg.recv_wait_timeout = 3;       // 接收超时 3 秒
 
     if (httpd_start(&_stream_srv, &scfg) == ESP_OK) {
         reg(_stream_srv, "/stream", HTTP_GET, _stream_h);
+        reg(_stream_srv, "/stream.mjpg", HTTP_GET, _stream_h);
         Serial.printf("[HTTP] 流 :%d\n", port + 1);
     } else {
         Serial.printf("[HTTP] 流 :%d 失败, 合并\n", port + 1);
@@ -227,36 +232,41 @@ esp_err_t CameraWebServer::handleCapture(httpd_req_t *r) {
 }
 
 esp_err_t CameraWebServer::handleStream(httpd_req_t *r) {
-    httpd_resp_set_type(r, "multipart/x-mixed-replace; boundary=frame");
+    // VLC 兼容: .mjpg 结尾用连续 JPEG 流
+    const char *uri = r->uri;
+    bool vlc_mode = (strstr(uri, ".mjpg") != NULL);
+    if (vlc_mode) {
+        httpd_resp_set_type(r, "image/jpeg");
+    } else {
+        httpd_resp_set_type(r, "multipart/x-mixed-replace; boundary=frame");
+    }
     httpd_resp_set_hdr(r, "Cache-Control", "no-store");
     httpd_resp_set_hdr(r, "Access-Control-Allow-Origin", "*");
+    // 单客户端模式: 新连接递增 token, 旧连接检测到 token 变化后退出
+    int my_token = ++g_stream_token;
     esp_err_t res;
-    int af_cnt = 0;
     while (true) {
-        // 每 150 帧重新触发自动对焦
-        if (++af_cnt >= 150 && _settings.af_mode == 1) {
-            af_cnt = 0;
-            sensor_t *s = esp_camera_sensor_get();
-            if (s) {
-                s->set_reg(s, 0x3022, 0xFF, 0x04);  // 单次对焦
-                s->set_reg(s, 0x3022, 0xFF, 0x08);  // 连续对焦
-            }
-        }
+        if (g_stream_token != my_token) break;  // 新客户端已连接, 让出
         camera_fb_t *fb = esp_camera_fb_get();
         if (!fb) { delay(5); continue; }
         g_frame_count++;
         g_bytes_sent += fb->len;
-        char hdr[160];
-        int hlen = snprintf(hdr, sizeof(hdr),
-            "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
-        res = httpd_resp_send_chunk(r, hdr, hlen);
-        if (res != ESP_OK) break;
-        res = httpd_resp_send_chunk(r, (const char*)fb->buf, fb->len);
-        if (res != ESP_OK) break;
-        res = httpd_resp_send_chunk(r, "\r\n", 2);
+        if (vlc_mode) {
+            // VLC 模式: 直接发送 JPEG 帧作为 chunk
+            res = httpd_resp_send_chunk(r, (const char*)fb->buf, fb->len);
+        } else {
+            // 浏览器模式: multipart/x-mixed-replace
+            char hdr[160];
+            int hlen = snprintf(hdr, sizeof(hdr),
+                "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
+            res = httpd_resp_send_chunk(r, hdr, hlen);
+            if (res != ESP_OK) break;
+            res = httpd_resp_send_chunk(r, (const char*)fb->buf, fb->len);
+            if (res != ESP_OK) break;
+            res = httpd_resp_send_chunk(r, "\r\n", 2);
+        }
         esp_camera_fb_return(fb);
         if (res != ESP_OK) break;
-        delay(5);
     }
     return ESP_OK;
 }
@@ -354,8 +364,8 @@ String CameraWebServer::genStatusJSON() {
     }
     doc["fps"] = fps;
     doc["bw"] = String(bw, 1) + "KB/s";
-    const char *rn[] = {"96x96","QQVGA","QCIF","HQVGA","QVGA","CIF","VGA","SVGA","XGA","HD","SXGA","UXGA","FHD","QXGA","QSXGA"};
-    if (_settings.framesize>=0 && _settings.framesize<=14) doc["resolution"] = rn[_settings.framesize];
+    const char *rn[] = {"96x96","QQVGA","QCIF","HQVGA","240x240","QVGA","CIF","HVGA","VGA","SVGA","XGA","HD","SXGA","UXGA","FHD","P_HD","P_3MP","QXGA","QHD","WQXGA","P_FHD","QSXGA"};
+    if (_settings.framesize>=0 && _settings.framesize<=21) doc["resolution"] = rn[_settings.framesize];
     doc["ip"] = WiFi.localIP().toString();
     doc["rssi"] = WiFi.RSSI();
     doc["ssid"] = WiFi.SSID();
