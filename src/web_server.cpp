@@ -1,10 +1,12 @@
 #include "web_server.h"
+#include <Preferences.h>
+#include <lwip/sockets.h>
 #include "esp_camera.h"
 #include <WiFi.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <lwip/sockets.h>
+
 
 CameraWebServer* CameraWebServer::_inst = nullptr;
 
@@ -158,7 +160,7 @@ document.addEventListener('change',function(e){if(e.target&&e.target.id=='af_mod
 function sr(r){var b=document.querySelectorAll('.rg .btn');for(var i=0;i<b.length;i++)b[i].classList.remove('on');document.getElementById('rb'+r).classList.add('on');fetch('/set?framesize='+r).then(function(){IM.src=SP+'?'+Date.now();T('已切换')})}
 function rst(){if(confirm('确定重启设备?')){fetch('/restart').then(function(){T('重启中...')})}}
 function tw(){document.getElementById('wb').classList.toggle('s')}
-function sw(){var s=document.getElementById('ws').value.trim(),p=document.getElementById('wp').value.trim();if(!s){T('输入 SSID');return}fetch('/wificonfig?ssid='+encodeURIComponent(s)+'&password='+encodeURIComponent(p)).then(function(){T('已保存，重启中…');setTimeout(function(){T('连回新网络后刷新页面')},3000)})}
+function sw(){var s=document.getElementById('ws').value.trim(),p=document.getElementById('wp').value.trim();if(!s){T('输入 SSID');return}T('正在保存…');fetch('/wificonfig?ssid='+encodeURIComponent(s)+'&password='+encodeURIComponent(p)).then(function(){T('已保存，设备即将重启');}).catch(function(){T('保存失败，请重试')})}
 function T(m){TS.textContent=m;TS.className='ts s';setTimeout(function(){TS.className='ts'},2500)}
 function P(){fetch('/status').then(function(r){return r.json()}).then(function(d){if(d.fps)document.getElementById('fps').textContent=d.fps+'FPS';if(d.resolution)document.getElementById('res').textContent=d.resolution;if(d.ip)document.getElementById('sip').textContent=d.ip;if(d.ssid)document.getElementById('sssid').textContent=d.ssid;if(d.rssi)document.getElementById('srssi').textContent=d.rssi+'dBm';if(d.bw)document.getElementById('sbw').textContent=d.bw;if(d.cpu)document.getElementById('scpu').textContent=d.cpu;if(d.temp)document.getElementById('stemp').textContent=d.temp;if(d.psram)document.getElementById('spsram').textContent=d.psram;if(d.free_heap)document.getElementById('sram').textContent=(d.free_heap/1024).toFixed(0)+'KB';if(d.uptime)document.getElementById('sup').textContent=d.uptime;if(d.settings){Object.keys(d.settings).forEach(function(k){var el=document.getElementById(k),vl=document.getElementById(k+'-v');if(el&&d.settings[k]!==undefined){el.value=d.settings[k];if(vl)vl.textContent=d.settings[k];if(k=='af_mode')afSync(d.settings[k])}})}})}
 </script>
@@ -384,8 +386,9 @@ esp_err_t CameraWebServer::handleWiFi(httpd_req_t *r) {
     httpd_resp_sendstr(r, "{\"ok\":1}");
     if (strlen(ssid)) {
         Serial.printf("[WiFi] 保存凭证: %s\n", ssid);
-        _wifiCb(ssid, pass);   // WiFi.begin(ssid, pass) 写入 NVS
-        g_pending_restart = true;  // 主循环执行重启, 确保响应已发出
+        _wifiCb(ssid, pass);
+        
+        g_pending_restart = true;  // 主循环 5s 后重启
     }
     return ESP_OK;
 }
@@ -462,6 +465,15 @@ String CameraWebServer::genStatusJSON() {
     doc["ip"] = WiFi.localIP().toString();
     doc["rssi"] = WiFi.RSSI();
     doc["ssid"] = WiFi.SSID();
+    {
+        Preferences pref;
+        pref.begin("camwifi",true);
+        String s = pref.getString("ssid","");
+        pref.end();
+        doc["saved_ssid"] = s.length()>0 ? s : "(none)";
+    }
+    
+
 doc["cpu"] = String(ESP.getCpuFreqMHz())+"MHz · CH"+String(WiFi.channel());
     // 芯片温度 (ESP32-S3 内置温度传感器)
     doc["temp"] = String(temperatureRead(), 1)+"°C";
