@@ -2,12 +2,19 @@
 #include "esp_camera.h"
 #include <WiFi.h>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <lwip/sockets.h>
+
 CameraWebServer* CameraWebServer::_inst = nullptr;
 
 // 全局帧计数器 (由流线程递增, 状态查询读取)
 static volatile uint32_t g_frame_count = 0;
 static volatile uint32_t g_bytes_sent = 0;
 static volatile int g_stream_token = 0;  // 新客户端连接时递增, 旧客户端退出
+
+// 前向声明
+static void stream_server_task(void *arg);
 
 static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -149,15 +156,14 @@ function P(){fetch('/status').then(function(r){return r.json()}).then(function(d
 // =====================  Server Implementation  =====================
 
 CameraWebServer::CameraWebServer()
-    : _ctrl_srv(nullptr), _stream_srv(nullptr), _wifiCb(nullptr)
+    : _ctrl_srv(nullptr), _wifiCb(nullptr)
 {
     _inst = this;
     _settings = { FRAMESIZE_VGA,12, 0,0,0,0,0, 0,1,0, 0,0, 1,0, 1,512 };
 }
 
 CameraWebServer::~CameraWebServer() {
-    if (_ctrl_srv)  httpd_stop(_ctrl_srv);
-    if (_stream_srv && _stream_srv != _ctrl_srv) httpd_stop(_stream_srv);
+    if (_ctrl_srv) httpd_stop(_ctrl_srv);
     if (_inst == this) _inst = nullptr;
 }
 
@@ -188,27 +194,11 @@ void CameraWebServer::begin(int port) {
         Serial.println("[HTTP] 控制服务器失败");
     }
 
-    httpd_config_t scfg = HTTPD_DEFAULT_CONFIG();
-    scfg.server_port = port + 1;
-    scfg.ctrl_port = 32769;
-    scfg.stack_size = 16384;
-    scfg.max_uri_handlers = 4;
-    scfg.lru_purge_enable = true;     // 自动清理死连接
-    scfg.send_wait_timeout = 3;       // 发送超时 3 秒
-    scfg.recv_wait_timeout = 3;       // 接收超时 3 秒
-
-    if (httpd_start(&_stream_srv, &scfg) == ESP_OK) {
-        reg(_stream_srv, "/stream", HTTP_GET, _stream_h);
-        reg(_stream_srv, "/stream.mjpg", HTTP_GET, _stream_h);
-        Serial.printf("[HTTP] 流 :%d\n", port + 1);
-    } else {
-        Serial.printf("[HTTP] 流 :%d 失败, 合并\n", port + 1);
-        _stream_srv = _ctrl_srv;
-        reg(_stream_srv, "/stream", HTTP_GET, _stream_h);
-    }
+    // 独立 TCP 流服务器 (端口 81, FreeRTOS 任务)
+    xTaskCreate(stream_server_task, "stream_srv", 4096, NULL, 5, NULL);
 
     applySettings();
-    Serial.printf("[Web] http://%s:%d  | 流 http://%s:%d\n",
+    Serial.printf("[Web] http://%s:%d  | 流 tcp://%s:%d\n",
         WiFi.localIP().toString().c_str(), port,
         WiFi.localIP().toString().c_str(), port + 1);
 }
@@ -235,43 +225,94 @@ esp_err_t CameraWebServer::handleCapture(httpd_req_t *r) {
     return ret;
 }
 
-esp_err_t CameraWebServer::handleStream(httpd_req_t *r) {
-    // VLC 兼容: .mjpg 结尾用连续 JPEG 流
-    const char *uri = r->uri;
-    bool vlc_mode = (strstr(uri, ".mjpg") != NULL);
-    if (vlc_mode) {
-        httpd_resp_set_type(r, "image/jpeg");
-    } else {
-        httpd_resp_set_type(r, "multipart/x-mixed-replace; boundary=frame");
-    }
-    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(r, "Access-Control-Allow-Origin", "*");
-    // 单客户端模式: 新连接递增 token, 旧连接检测到 token 变化后退出
+// ========== 独立 TCP 流服务器 (端口 81, 不阻塞 httpd) ==========
+
+static void serve_client(int fd, bool vlc_mode) {
     int my_token = ++g_stream_token;
-    esp_err_t res;
+    const char *header = vlc_mode ?
+        "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n" :
+        "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
+    send(fd, header, strlen(header), 0);
+
+    int res;
     while (true) {
-        if (g_stream_token != my_token) break;  // 新客户端已连接, 让出
+        if (g_stream_token != my_token) break;
         camera_fb_t *fb = esp_camera_fb_get();
-        if (!fb) { delay(5); continue; }
+        if (!fb) { delay(2); continue; }
         g_frame_count++;
         g_bytes_sent += fb->len;
+
         if (vlc_mode) {
-            // VLC 模式: 直接发送 JPEG 帧作为 chunk
-            res = httpd_resp_send_chunk(r, (const char*)fb->buf, fb->len);
+            res = send(fd, (const char*)fb->buf, fb->len, 0);
         } else {
-            // 浏览器模式: multipart/x-mixed-replace
             char hdr[160];
             int hlen = snprintf(hdr, sizeof(hdr),
                 "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
-            res = httpd_resp_send_chunk(r, hdr, hlen);
-            if (res != ESP_OK) break;
-            res = httpd_resp_send_chunk(r, (const char*)fb->buf, fb->len);
-            if (res != ESP_OK) break;
-            res = httpd_resp_send_chunk(r, "\r\n", 2);
+            res = send(fd, hdr, hlen, 0);
+            if (res > 0) res = send(fd, (const char*)fb->buf, fb->len, 0);
+            if (res > 0) send(fd, "\r\n", 2, 0);
         }
         esp_camera_fb_return(fb);
-        if (res != ESP_OK) break;
+        if (res <= 0) break;
     }
+    close(fd);
+}
+
+static void stream_server_task(void *arg) {
+    int port = 81;
+    int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd < 0) {
+        Serial.println("[TCP] 流 socket 创建失败");
+        vTaskDelete(NULL);
+        return;
+    }
+    int opt = 1;
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = INADDR_ANY;
+    if (bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        Serial.printf("[TCP] 流端口 %d 绑定失败\n", port);
+        close(listen_fd);
+        vTaskDelete(NULL);
+        return;
+    }
+    listen(listen_fd, 3);
+    Serial.printf("[TCP] 流服务器启动 :%d\n", port);
+
+    while (true) {
+        struct sockaddr_in client;
+        socklen_t len = sizeof(client);
+        int client_fd = accept(listen_fd, (struct sockaddr*)&client, &len);
+        if (client_fd < 0) { delay(10); continue; }
+
+        // 检测请求类型 (读取 HTTP 请求行)
+        char buf[128];
+        int n = recv(client_fd, buf, sizeof(buf) - 1, 0);
+        if (n <= 0) { close(client_fd); continue; }
+        buf[n] = 0;
+        bool vlc_mode = (strstr(buf, ".mjpg") != NULL);
+
+        // 创建客户端任务
+        // 传参: [fd, vlc_mode]
+        int *params = (int*)malloc(2 * sizeof(int));
+        params[0] = client_fd;
+        params[1] = vlc_mode ? 1 : 0;
+        xTaskCreate([](void *p) {
+            int *params = (int*)p;
+            serve_client(params[0], params[1] == 1);
+            free(params);
+            vTaskDelete(NULL);
+        }, "stream_cli", 4096, params, 5, NULL);
+    }
+    close(listen_fd);
+    vTaskDelete(NULL);
+}
+
+esp_err_t CameraWebServer::handleStream(httpd_req_t *r) {
+    httpd_resp_set_type(r, "text/plain");
+    httpd_resp_sendstr(r, "Use port 81 for streaming");
     return ESP_OK;
 }
 

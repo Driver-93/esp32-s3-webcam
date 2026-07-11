@@ -32,7 +32,6 @@ public:
 
 private:
     httpd_handle_t _ctrl_srv;
-    httpd_handle_t _stream_srv;
     camera_settings_t _settings;
     std::function<void(const char*, const char*)> _wifiCb;
 

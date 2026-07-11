@@ -14,7 +14,7 @@
 
 ## 功能特性
 
-- **MJPEG 视频流** — 双服务器架构，控制端口 80，流端口 81，互不阻塞
+- **MJPEG 视频流** — 独立 TCP 流服务器（端口 81），FreeRTOS 独立任务，不阻塞 httpd
 - **拍照** — 一键拍照并下载 JPEG 图片
 - **分辨率切换** — QVGA / VGA / SVGA / UXGA 一键切换
 - **图像调节** — 质量、亮度、对比度、饱和度、锐度、降噪
@@ -27,6 +27,9 @@
 - **双模式 WiFi** — STA 连接路由 + AP 热点备份
 - **VLC 兼容** — 支持 `http://ip:81/stream.mjpg` 直接播放
 - **工业风 UI** — 深色主题、等宽字体、直角硬朗风格
+- **独立流服务** — TCP 流服务器在独立 FreeRTOS 任务中运行，不阻塞 httpd
+- **快速刷新** — 独立任务架构支持任意次数页面刷新，不会卡死
+- **自动清理** — 新客户端连接自动断开旧客户端，释放资源
 
 ## 硬件接线
 
@@ -143,11 +146,11 @@ esp32-camera-web/
 | 路径 | 方法 | 说明 |
 |------|------|------|
 | `/` | GET | Web 管理页面 |
-| `/stream` | GET | MJPEG 视频流 |
+| `:81/stream` | TCP | MJPEG 视频流 (独立 TCP 服务) |
+| `:81/stream.mjpg` | TCP | VLC 兼容流 |
 | `/capture` | GET | 拍照 (返回 JPEG) |
 | `/set?key=value` | GET | 设置摄像头参数 |
 | `/status` | GET | 获取系统状态 (JSON) |
-| `/wificonfig?ssid=xxx&password=xxx` | GET | 配置 WiFi |
 | `/restart` | GET | 重启设备 |
 
 ### 摄像头参数 (`/set`)
